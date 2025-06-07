@@ -2,7 +2,6 @@
 
 from embeddings.vector_store import VectorStore
 from config import EMBEDDING_MODEL_NAME
-from sentence_transformers import SentenceTransformer
 import openai
 import os
 from dotenv import load_dotenv
@@ -11,7 +10,6 @@ load_dotenv()
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-model = SentenceTransformer(EMBEDDING_MODEL_NAME)
 vector_store = VectorStore()
 
 # Global chat history (per session, in-memory)
@@ -43,7 +41,11 @@ Answer:
 
 def answer(query, top_k=5):
     # Embed query
-    query_embedding = model.encode([query])[0]
+    response = openai.embeddings.create(
+        model=EMBEDDING_MODEL_NAME,
+        input=[query]
+    )
+    query_embedding = response.data[0].embedding
 
     # Search in Qdrant
     hits = vector_store.search(query_embedding, top_k=top_k)
