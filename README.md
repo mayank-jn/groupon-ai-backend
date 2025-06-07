@@ -1,6 +1,6 @@
 # Groupon AI Knowledge Assistant - Backend
 
-A FastAPI-based backend implementing RAG (Retrieval-Augmented Generation) for intelligent document search and Q&A using Qdrant vector database, OpenAI GPT-4, and SentenceTransformers.
+A FastAPI-based backend implementing RAG (Retrieval-Augmented Generation) for intelligent document search and Q&A using Qdrant vector database, OpenAI GPT-4, and OpenAI embeddings.
 
 ## 🚀 Features
 
@@ -18,7 +18,7 @@ A FastAPI-based backend implementing RAG (Retrieval-Augmented Generation) for in
 - **Framework**: FastAPI 0.104+
 - **AI/ML**: 
   - OpenAI GPT-4 for text generation
-  - SentenceTransformers for embeddings
+  - OpenAI Embeddings API for vector representations
   - LangChain for document processing and RAG pipeline
 - **Vector Database**: Qdrant (Cloud or local Docker)
 - **Document Processing**: PyPDF2 for PDF parsing
@@ -177,7 +177,7 @@ python-multipart       # File upload support
 
 1. **Document Ingestion**:
    - Documents are processed and split into chunks
-   - Text embeddings are generated using SentenceTransformers
+   - Text embeddings are generated using the OpenAI Embeddings API
    - Chunks are stored in Qdrant vector database
 
 2. **Query Processing**:
@@ -196,7 +196,7 @@ python-multipart       # File upload support
 - **Qdrant Client**: Vector database operations
 - **OpenAI Client**: GPT-4 text generation
 - **LangChain**: Document processing and RAG pipeline
-- **SentenceTransformers**: Text embedding generation
+- **OpenAI Embeddings API**: Text embedding generation
 
 ## 🔍 Usage Examples
 
