@@ -10,16 +10,35 @@ class VectorStore:
         self.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
     def create_collection_if_not_exists(self, vector_size):
+        """Create the collection if missing and recreate if dimension differs."""
         try:
-            self.client.get_collection(COLLECTION_NAME)
-            print("Collection already exists — skipping create.")
+            info = self.client.get_collection(COLLECTION_NAME)
+            stored_size = info.config.params.vectors.size
+            if stored_size != vector_size:
+                print(
+                    f"Collection dimension {stored_size} != {vector_size} -- recreating..."
+                )
+                self.client.recreate_collection(
+                    collection_name=COLLECTION_NAME,
+                    vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+                )
+                print("Collection recreated.")
+            else:
+                print("Collection already exists with correct dimension.")
         except Exception:
-            print("Collection does not exist — creating...")
+            print("Collection does not exist -- creating...")
             self.client.create_collection(
                 collection_name=COLLECTION_NAME,
                 vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
             )
             print("Collection created.")
+
+    def create_collection(self, vector_size):
+        """Always recreate the collection."""
+        self.client.recreate_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+        )
 
     def upsert_embeddings(self, embeddings, metadatas):
         points = []
