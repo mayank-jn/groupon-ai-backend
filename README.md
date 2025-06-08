@@ -229,7 +229,7 @@ curl -X POST "http://localhost:8000/reset-chat"
    - Check Python version compatibility (3.8+)
 
 4. **CORS Issues**:
-   - Frontend should run on allowed origins (localhost:5173, localhost:3000)
+   - Frontend should run on allowed origins (localhost:5173, localhost:3000, https://groupon-ai-frontend-1167.vercel.app)
    - CORS middleware is configured in `app.py`
 
 ### Logs and Debugging
