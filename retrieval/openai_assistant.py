@@ -2,6 +2,8 @@ import os
 import time
 import openai
 from dotenv import load_dotenv
+from embeddings.vector_store import VectorStore
+from config import EMBEDDING_MODEL_NAME
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -9,6 +11,15 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # Global assistant and thread identifiers
 assistant_id = os.getenv("OPENAI_ASSISTANT_ID")
 _thread_id = None
+vector_store = VectorStore()
+
+
+def _build_context(hits):
+    """Return a context string from Qdrant search hits."""
+    return "\n\n".join([
+        hit.payload.get("text", "")
+        for hit in hits
+    ])
 
 
 def _ensure_assistant():
@@ -43,11 +54,21 @@ def answer(query: str) -> dict:
     aid = _ensure_assistant()
     tid = _ensure_thread()
 
-    # Add user message
+    # Fetch context from Qdrant
+    response = openai.embeddings.create(
+        model=EMBEDDING_MODEL_NAME,
+        input=[query],
+    )
+    query_embedding = response.data[0].embedding
+    hits = vector_store.search(query_embedding, top_k=5)
+    context = _build_context(hits)
+
+    message_content = f"Context:\n{context}\n\nQuestion: {query}"
+
     openai.beta.threads.messages.create(
         thread_id=tid,
         role="user",
-        content=query,
+        content=message_content,
     )
 
     run = openai.beta.threads.runs.create(
