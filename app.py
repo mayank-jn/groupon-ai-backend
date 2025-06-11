@@ -6,6 +6,7 @@ from ingest.pdf_ingest import load_pdf, chunk_text
 from embeddings.vector_store import VectorStore
 from config import EMBEDDING_MODEL_NAME
 from retrieval.qa_chain import answer as rag_answer, reset_chat_history
+from retrieval.openai_assistant import answer as assistant_answer, reset_thread
 import os
 import openai
 
@@ -61,7 +62,20 @@ async def search_query(query: str):
     result = rag_answer(query)
     return result
 
+
+@app.post("/assistant-search")
+async def assistant_search(query: str):
+    """Use OpenAI's Assistants API to handle the conversation."""
+    result = assistant_answer(query)
+    return result
+
 @app.post("/reset-chat")
 async def reset_chat():
     reset_chat_history()
     return {"status": "success", "message": "Chat history cleared."}
+
+
+@app.post("/assistant-reset")
+async def assistant_reset():
+    reset_thread()
+    return {"status": "success", "message": "Assistant thread reset."}
