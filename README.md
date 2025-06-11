@@ -12,6 +12,7 @@ A FastAPI-based backend implementing RAG (Retrieval-Augmented Generation) for in
 - **CORS Support**: Configured for frontend integration
 - **Interactive API Docs**: Swagger UI at `/docs`
 - **Chat Memory**: Conversation context management
+- **OpenAI Assistants API**: Built-in threads for persistent context
 
 ## 🛠️ Tech Stack
 
@@ -59,6 +60,35 @@ Reset the conversation history.
 ```json
 {
   "message": "Chat history reset successfully"
+}
+```
+
+#### `POST /assistant-search`
+Query using the OpenAI Assistants API. Context is managed on OpenAI's side.
+
+**Request Body:**
+```json
+{
+  "query": "string"
+}
+```
+
+**Response:**
+```json
+{
+  "answer": "AI-generated response",
+  "assistant_id": "assistant_123",
+  "thread_id": "thread_456"
+}
+```
+
+#### `POST /assistant-reset`
+Start a new assistant thread.
+
+**Response:**
+```json
+{
+  "message": "Assistant thread reset"
 }
 ```
 
