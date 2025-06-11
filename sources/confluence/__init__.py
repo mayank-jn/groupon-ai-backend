@@ -1,10 +1,9 @@
 """
-Confluence source adapter package (Future Implementation).
+Confluence source adapter package.
 
-This package will handle integration with Confluence for document retrieval.
+This package handles integration with Confluence for document retrieval.
 """
 
-# from .adapter import ConfluenceAdapter
-# __all__ = ['ConfluenceAdapter']
+from .adapter import ConfluenceAdapter
 
-# Placeholder - to be implemented in the future 
+__all__ = ['ConfluenceAdapter'] 

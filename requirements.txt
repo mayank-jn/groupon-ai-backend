@@ -11,3 +11,6 @@ tqdm
 python-multipart
 tiktoken
 requests
+atlassian-python-api
+beautifulsoup4
+html2text
