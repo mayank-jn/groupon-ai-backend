@@ -49,18 +49,18 @@ def _ensure_thread():
     return _thread_id
 
 
-def answer(query: str) -> dict:
+def answer(query: str, source_types=None) -> dict:
     """Submit a query to the assistant and return its answer."""
     aid = _ensure_assistant()
     tid = _ensure_thread()
 
-    # Fetch context from Qdrant
+    # Fetch context from Qdrant with optional source filtering
     response = openai.embeddings.create(
         model=EMBEDDING_MODEL_NAME,
         input=[query],
     )
     query_embedding = response.data[0].embedding
-    hits = vector_store.search(query_embedding, top_k=5)
+    hits = vector_store.search(query_embedding, top_k=5, source_types=source_types)
     context = _build_context(hits)
 
     message_content = f"Context:\n{context}\n\nQuestion: {query}"

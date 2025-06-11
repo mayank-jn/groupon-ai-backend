@@ -39,7 +39,7 @@ Answer:
 
     return messages
 
-def answer(query, top_k=5):
+def answer(query, top_k=5, source_types=None):
     # Embed query
     response = openai.embeddings.create(
         model=EMBEDDING_MODEL_NAME,
@@ -47,8 +47,8 @@ def answer(query, top_k=5):
     )
     query_embedding = response.data[0].embedding
 
-    # Search in Qdrant
-    hits = vector_store.search(query_embedding, top_k=top_k)
+    # Search in Qdrant with optional source filtering
+    hits = vector_store.search(query_embedding, top_k=top_k, source_types=source_types)
 
     # Build context
     context = build_context_from_sources(hits)
