@@ -12,7 +12,7 @@ A FastAPI-based backend implementing RAG (Retrieval-Augmented Generation) for in
 - **CORS Support**: Configured for frontend integration
 - **Interactive API Docs**: Swagger UI at `/docs`
 - **Chat Memory**: Conversation context management
-- **OpenAI Assistants API**: Built-in threads for persistent context
+- **OpenAI Assistants API**: Threads with Qdrant-powered context
 
 ## 🛠️ Tech Stack
 
@@ -64,7 +64,7 @@ Reset the conversation history.
 ```
 
 #### `POST /assistant-search`
-Query using the OpenAI Assistants API. Context is managed on OpenAI's side.
+Query using the OpenAI Assistants API with additional context fetched from Qdrant.
 
 **Request Body:**
 ```json
@@ -128,6 +128,8 @@ Create a `.env` file in the backend directory:
 ```env
 # OpenAI Configuration
 OPENAI_API_KEY=your_openai_api_key
+# Optional: reuse an existing assistant ID
+OPENAI_ASSISTANT_ID=assistant_123
 
 # Qdrant Configuration (Cloud)
 QDRANT_URL=https://your-cluster-url.qdrant.tech

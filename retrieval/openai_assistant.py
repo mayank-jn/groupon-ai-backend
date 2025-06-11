@@ -3,12 +3,17 @@ import time
 import openai
 from dotenv import load_dotenv
 
+from embeddings.vector_store import VectorStore
+from config import EMBEDDING_MODEL_NAME
+from retrieval.qa_chain import build_context_from_sources
+
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Global assistant and thread identifiers
 assistant_id = os.getenv("OPENAI_ASSISTANT_ID")
 _thread_id = None
+vector_store = VectorStore()
 
 
 def _ensure_assistant():
@@ -20,8 +25,9 @@ def _ensure_assistant():
     assistant = openai.beta.assistants.create(
         name="Groupon Assistant",
         instructions=(
-            "You are a helpful assistant for Groupon engineers. Use your"
-            " knowledge and built-in retrieval capabilities to answer questions."
+            "You are a helpful assistant for Groupon engineers."
+            " Use any provided context from Qdrant as the primary source"
+            " for answers. If you do not know an answer, say so."
         ),
         model="gpt-4o",
     )
@@ -38,16 +44,25 @@ def _ensure_thread():
     return _thread_id
 
 
-def answer(query: str) -> dict:
-    """Submit a query to the assistant and return its answer."""
+def answer(query: str, top_k: int = 5) -> dict:
+    """Retrieve context from Qdrant and ask the assistant."""
     aid = _ensure_assistant()
     tid = _ensure_thread()
 
-    # Add user message
+    # Retrieve context from Qdrant
+    embedding = openai.embeddings.create(
+        model=EMBEDDING_MODEL_NAME,
+        input=[query],
+    ).data[0].embedding
+    hits = vector_store.search(embedding, top_k=top_k)
+    context = build_context_from_sources(hits)
+
+    user_msg = f"Question: {query}\n\nContext:\n{context}"
+
     openai.beta.threads.messages.create(
         thread_id=tid,
         role="user",
-        content=query,
+        content=user_msg,
     )
 
     run = openai.beta.threads.runs.create(
