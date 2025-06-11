@@ -6,5 +6,8 @@ qdrant-client
 openai
 python-dotenv
 PyPDF2
+python-docx
 tqdm
 python-multipart
+tiktoken
+requests
