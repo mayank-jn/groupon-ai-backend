@@ -7,6 +7,7 @@ This adapter handles document uploads and processes them using appropriate proce
 import os
 from typing import List, Dict, Any, Optional
 from fastapi import UploadFile
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from sources.base.interfaces import SourceAdapter, SourceResult
 from .processors import PDFProcessor, DOCXProcessor, TextProcessor
@@ -42,7 +43,7 @@ class DocumentUploadAdapter(SourceAdapter):
     
     def validate_input(self, source_input: Any) -> bool:
         """Validate that the input is appropriate for this source adapter."""
-        if isinstance(source_input, UploadFile):
+        if isinstance(source_input, (UploadFile, StarletteUploadFile)):
             filename = source_input.filename
             if filename:
                 file_extension = os.path.splitext(filename)[1].lower()
@@ -57,14 +58,14 @@ class DocumentUploadAdapter(SourceAdapter):
     
     def process_source(self, source_input: Any, **kwargs) -> List[SourceResult]:
         """Process input from this source and return list of SourceResult objects."""
-        if isinstance(source_input, UploadFile):
+        if isinstance(source_input, (UploadFile, StarletteUploadFile)):
             return self._process_upload_file(source_input, **kwargs)
         elif isinstance(source_input, str):
             return self._process_file_path(source_input, **kwargs)
         else:
             raise ValueError(f"Unsupported input type: {type(source_input)}")
     
-    def _process_upload_file(self, upload_file: UploadFile, **kwargs) -> List[SourceResult]:
+    def _process_upload_file(self, upload_file, **kwargs) -> List[SourceResult]:
         """Process an uploaded file."""
         if not upload_file.filename:
             raise ValueError("Upload file must have a filename")

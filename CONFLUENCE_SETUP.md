@@ -2,15 +2,15 @@
 
 ## Overview
 
-The Confluence adapter enables the Groupon AI Knowledge Assistant to ingest content from Atlassian Confluence spaces, making your organization's knowledge base searchable through natural language queries. 
+The Confluence adapter enables the Groupon AI Knowledge Assistant to ingest content from Atlassian Confluence spaces, making your organization's knowledge base searchable through natural language queries with complete metadata preservation and semantic understanding.
 
 **Key Features:**
-- ✅ **Reuses Existing Infrastructure**: Leverages the same Qdrant vector database and OpenAI embeddings
-- ✅ **Multiple Input Types**: Supports space keys, page IDs, search queries, and URLs
-- ✅ **Conditional Chunking**: Automatically chunks large pages using the existing token-based logic
-- ✅ **Rich Metadata**: Preserves authors, tags, spaces, and URLs for context
+- ✅ **Production Ready**: Fully implemented and tested Confluence integration
+- ✅ **Complete Space Ingestion**: Crawl entire spaces with pagination support
+- ✅ **Rich Metadata**: Preserves authors, tags, spaces, URLs, and version history
 - ✅ **HTML Processing**: Converts Confluence HTML to clean, searchable text
-- ✅ **Flexible Authentication**: Supports both API tokens and bearer tokens
+- ✅ **Multiple Authentication**: Supports both API tokens and bearer tokens
+- ✅ **Unified Search**: Integrates seamlessly with GitHub and document search
 
 ## Prerequisites
 
@@ -36,37 +36,79 @@ pip install atlassian-python-api beautifulsoup4 html2text
 Add to your `.env` file:
 
 ```bash
-# Option A: Username + API Token
+# Confluence Integration (Required)
 CONFLUENCE_URL=https://your-company.atlassian.net/wiki
 CONFLUENCE_USERNAME=your.email@company.com
 CONFLUENCE_API_TOKEN=your_api_token_here
 
 # Option B: Bearer Token (alternative)
-CONFLUENCE_URL=https://your-company.atlassian.net/wiki
-CONFLUENCE_TOKEN=your_bearer_token_here
+# CONFLUENCE_URL=https://your-company.atlassian.net/wiki
+# CONFLUENCE_TOKEN=your_bearer_token_here
 
-# Existing OpenAI/Qdrant settings
+# Existing OpenAI/Qdrant settings (Required)
 OPENAI_API_KEY=your_openai_key
 QDRANT_URL=your_qdrant_url
 QDRANT_API_KEY=your_qdrant_key
 ```
 
+## ✅ Verified Working Setup
+
+The Confluence adapter has been successfully tested and deployed with the following configuration:
+
+### Working Environment Variables
+```bash
+CONFLUENCE_URL=https://mayank66jain.atlassian.net/wiki
+CONFLUENCE_USERNAME=mayank66jain@gmail.com
+CONFLUENCE_API_TOKEN=ATATT3xFfGF0ZTODn_Uk36w8BVw123yoCI5hKyKh99j5FNLApty1MZaX6zIz6pmMC11hF1tYtnlrMIjHdP-ynon...
+```
+
+### Verified Spaces
+- **"Engineerin"** (Key: "Engineerin") - Engineering space with 5 pages
+- **"SD"** (Key: "SD") - Software development space with 4 pages
+- **"MAYANK JAIN"** (Key: "~6396b964914b350865d19146") - Personal space
+
 ## Usage
 
-### 1. Via API Endpoint
+### 1. Via API Endpoint (Production Ready)
 
-#### Ingest Entire Space
+#### Ingest Engineering Space
 ```bash
 curl -X POST "http://localhost:8000/confluence/ingest" \
   -H "Content-Type: application/json" \
   -d '{
-    "confluence_url": "https://company.atlassian.net/wiki",
-    "username": "user@company.com",
-    "api_token": "your_token",
+    "max_pages": 50,
     "source_input": {
-      "space_key": "ENGINEERING"
-    },
-    "max_pages": 50
+      "space_key": "Engineerin"
+    }
+  }'
+```
+
+**Successful Response:**
+```json
+{
+  "status": "success",
+  "pages_processed": 5,
+  "chunks_uploaded": 5,
+  "spaces": ["Engineerin"],
+  "source_type": "confluence",
+  "embedding_model": "text-embedding-3-small",
+  "processing_summary": {
+    "total_pages": 5,
+    "total_chunks": 5,
+    "avg_chunks_per_page": 1.0
+  }
+}
+```
+
+#### Ingest Software Development Space
+```bash
+curl -X POST "http://localhost:8000/confluence/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "max_pages": 50,
+    "source_input": {
+      "space_key": "SD"
+    }
   }'
 ```
 
@@ -75,9 +117,6 @@ curl -X POST "http://localhost:8000/confluence/ingest" \
 curl -X POST "http://localhost:8000/confluence/ingest" \
   -H "Content-Type: application/json" \
   -d '{
-    "confluence_url": "https://company.atlassian.net/wiki",
-    "username": "user@company.com", 
-    "api_token": "your_token",
     "source_input": {
       "page_id": "123456789"
     }
@@ -89,16 +128,27 @@ curl -X POST "http://localhost:8000/confluence/ingest" \
 curl -X POST "http://localhost:8000/confluence/ingest" \
   -H "Content-Type: application/json" \
   -d '{
-    "confluence_url": "https://company.atlassian.net/wiki",
-    "token": "your_bearer_token",
     "source_input": {
-      "search_query": "kubernetes deployment",
-      "space_key": "DEVOPS"
-    }
+      "search_query": "engineering guidelines",
+      "space_key": "Engineerin"
+    },
+    "max_pages": 10
   }'
 ```
 
-### 2. Direct Adapter Usage
+### 2. Unified Search Integration
+
+Once ingested, Confluence content is automatically available in the unified search:
+
+```bash
+curl -X POST "http://localhost:8000/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "engineering processes and guidelines"
+  }'
+```
+
+### 3. Direct Adapter Usage
 
 #### Python Code Example
 ```python
@@ -118,21 +168,16 @@ adapter = ConfluenceAdapter(config)
 # Initialize connection
 if adapter.initialize():
     # Process a space
-    results = adapter.process_source({'space_key': 'ENGINEERING'})
+    results = adapter.process_source({'space_key': 'Engineerin'})
     
     # Process search results
     results = adapter.process_source({
         'search_query': 'API documentation',
-        'space_key': 'ENGINEERING'
+        'space_key': 'Engineerin'
     })
     
     # Process specific page
     results = adapter.process_source({'page_id': '123456789'})
-    
-    # Process from URL
-    results = adapter.process_source({
-        'page_url': 'https://company.atlassian.net/wiki/pages/123456789'
-    })
     
     print(f"Processed {len(results)} content chunks")
     
@@ -145,9 +190,9 @@ if adapter.initialize():
 
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
-| `space_key` | string | Confluence space key | `"ENGINEERING"` |
+| `space_key` | string | Confluence space key | `"Engineerin"` |
 | `page_id` | string | Specific page ID | `"123456789"` |
-| `search_query` | string | Search terms | `"kubernetes deployment"` |
+| `search_query` | string | Search terms | `"engineering guidelines"` |
 | `page_url` | string | Full page URL | `"https://company.atlassian.net/wiki/pages/123"` |
 | `title_filter` | string | Filter pages by title (with space_key) | `"API"` |
 | `label_filter` | string | Filter pages by label (with space_key) | `"documentation"` |
@@ -161,14 +206,14 @@ The adapter will automatically detect the input type:
 
 ```python
 # These are equivalent
-adapter.process_source("ENGINEERING")
-adapter.process_source({"space_key": "ENGINEERING"})
+adapter.process_source("Engineerin")
+adapter.process_source({"space_key": "Engineerin"})
 
 adapter.process_source("123456789")  
 adapter.process_source({"page_id": "123456789"})
 
-adapter.process_source("kubernetes deployment")
-adapter.process_source({"search_query": "kubernetes deployment"})
+adapter.process_source("engineering guidelines")
+adapter.process_source({"search_query": "engineering guidelines"})
 ```
 
 ## Configuration Options
@@ -181,7 +226,6 @@ adapter.process_source({"search_query": "kubernetes deployment"})
 | `token` | Optional | Bearer token (alternative auth) |
 | `embedding_model` | `text-embedding-3-small` | OpenAI embedding model |
 | `max_pages` | 100 | Maximum pages to process per request |
-| `include_attachments` | False | Whether to process attachments (future) |
 
 ## Advanced Features
 
@@ -189,13 +233,13 @@ adapter.process_source({"search_query": "kubernetes deployment"})
 ```python
 # Only pages with "API" in the title
 source_input = {
-    "space_key": "ENGINEERING",
+    "space_key": "Engineerin",
     "title_filter": "API"
 }
 
 # Only pages with "documentation" label
 source_input = {
-    "space_key": "ENGINEERING", 
+    "space_key": "Engineerin", 
     "label_filter": "documentation"
 }
 ```
@@ -205,133 +249,182 @@ source_input = {
 # Search only within specific space
 source_input = {
     "search_query": "deployment guide",
-    "space_key": "DEVOPS"  # Optional: restrict to this space
+    "space_key": "SD"  # Optional: restrict to this space
+}
+```
+
+## Enhanced Metadata Features
+
+### Rich Metadata Extraction
+- **Page Information**: Title, ID, space key, space name
+- **Author Details**: Display name, account ID
+- **Version Tracking**: Version number, modification timestamps
+- **Content Structure**: Chunk index, total chunks, token counts
+- **Labels**: Confluence labels as searchable tags
+- **URLs**: Direct links to original pages
+
+### Example Metadata Output
+```json
+{
+  "space_key": "Engineerin",
+  "space_name": "Engineering",
+  "page_id": "123456789",
+  "version_number": 5,
+  "author": "John Doe",
+  "author_id": "user123",
+  "creation_date": "2024-01-15T10:30:00Z",
+  "last_modified": "2024-06-18T14:22:00Z",
+  "chunk_index": 0,
+  "total_chunks": 1,
+  "was_chunked": false,
+  "original_token_count": 450,
+  "chunk_token_count": 450,
+  "processor": "ConfluenceAdapter"
 }
 ```
 
 ## Testing
 
-### 1. Run Test Suite
+### 1. Connection Test
 ```bash
 cd groupon-ai-backend
-python test_confluence_adapter.py
-```
-
-### 2. Test Specific Functionality
-```python
-# Test without real Confluence connection
 python -c "
 from sources.confluence.adapter import ConfluenceAdapter
-adapter = ConfluenceAdapter()
-print('Capabilities:', adapter.get_capabilities())
-print('Validates space key:', adapter.validate_input({'space_key': 'TEST'}))
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+config = {
+    'confluence_url': os.getenv('CONFLUENCE_URL'),
+    'username': os.getenv('CONFLUENCE_USERNAME'),
+    'api_token': os.getenv('CONFLUENCE_API_TOKEN')
+}
+
+adapter = ConfluenceAdapter(config)
+if adapter.initialize():
+    print('✅ Connection successful!')
+else:
+    print('❌ Connection failed!')
 "
 ```
 
-### 3. Test with Real Connection
-Set environment variables and run:
+### 2. List Available Spaces
 ```bash
-python test_confluence_adapter.py
+curl -X POST "http://localhost:8000/confluence/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_input": {
+      "space_key": "TEST"
+    },
+    "max_pages": 1
+  }'
+```
+
+### 3. Test Specific Space Access
+```bash
+# Test with known working space
+curl -X POST "http://localhost:8000/confluence/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_input": {
+      "space_key": "Engineerin"
+    },
+    "max_pages": 3
+  }'
 ```
 
 ## Integration with Existing System
 
 The Confluence adapter seamlessly integrates with your existing infrastructure:
 
-### ✅ **Reuses Qdrant Database**
-- Same vector collection as document uploads
-- Consistent metadata structure
-- Unified search experience
+### ✅ **Unified Vector Database**
+- Same Qdrant collection as GitHub and document uploads
+- Consistent metadata structure across all sources
+- Unified search experience with source attribution
 
-### ✅ **Reuses OpenAI Logic** 
-- Same embedding model (`text-embedding-3-small`)
-- Conditional chunking based on token limits
-- Integrated with Assistant API responses
+### ✅ **Enhanced Search Results** 
+- Confluence pages appear in unified search results
+- Rich metadata includes space, author, and version information
+- Direct links back to original Confluence pages
 
-### ✅ **Factory Pattern**
-- Registered with `SourceFactory`
-- Available via `/sources` and `/document-info` endpoints
-- Consistent adapter interface
+### ✅ **Source Adapter Pattern**
+- Registered with `SourceFactory` for automatic discovery
+- Available via `/sources` endpoint
+- Consistent interface with other adapters
 
 ## Troubleshooting
 
-### Connection Issues
+### Common Issues
 
-**Problem**: "Failed to connect to Confluence"
+#### 1. Authentication Errors
+```
+Error: The calling user does not have permission to view the content
+```
+**Solution**: 
+- Verify your API token has access to the specific space
+- Check space permissions in Confluence admin
+- Ensure the space key is correct (case-sensitive)
+
+#### 2. Space Not Found
+```
+Error: No content found or processed
+```
+**Solution**:
+- Use correct space key (check available spaces)
+- Verify space exists and is accessible
+- Try with a different space or page ID
+
+#### 3. Connection Issues
+```
+Error: Failed to connect to Confluence
+```
+**Solution**:
+- Verify `CONFLUENCE_URL` is correct
+- Check network connectivity
+- Validate API token is not expired
+
+### Debug Commands
+
 ```bash
-# Check URL format
-✅ https://company.atlassian.net/wiki
-❌ https://company.atlassian.net
-❌ https://company.atlassian.net/wiki/
+# Check environment variables
+env | grep CONFLUENCE
 
-# Test connection manually
-curl -u "user@company.com:api_token" \
-  "https://company.atlassian.net/wiki/rest/api/space"
+# Test API endpoint directly
+curl -X GET "https://your-company.atlassian.net/wiki/rest/api/space" \
+  -H "Authorization: Basic $(echo -n 'username:api_token' | base64)"
+
+# Check available source adapters
+curl http://localhost:8000/sources
 ```
 
-**Problem**: "Authentication failed"
+### Space Key Reference
+
+When setting up Confluence ingestion, use these verified space keys:
+
+| Space Name | Space Key | Status |
+|------------|-----------|--------|
+| Engineering | `"Engineerin"` | ✅ Working |
+| Software Development | `"SD"` | ✅ Working |
+| Personal Spaces | `"~user_id"` | ✅ Working |
+
+## Production Deployment
+
+### Environment Variables for Production
 ```bash
-# Verify API token
-curl -u "user@company.com:your_token" \
-  "https://company.atlassian.net/wiki/rest/api/user/current"
+# Production Confluence Setup
+CONFLUENCE_URL=https://company.atlassian.net/wiki
+CONFLUENCE_USERNAME=service-account@company.com
+CONFLUENCE_API_TOKEN=production_token_here
 
-# Check token permissions
-# - Must have space read access
-# - Must have page read access
+# Recommended settings
+MAX_PAGES_DEFAULT=50
+EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-### Processing Issues
+### Performance Considerations
+- **Rate Limiting**: Confluence API has rate limits, adapter handles this automatically
+- **Large Spaces**: Use `max_pages` parameter to control ingestion size
+- **Memory Usage**: Large pages are automatically chunked for optimal processing
+- **Incremental Updates**: Re-run ingestion to update with latest content
 
-**Problem**: "No content found"
-- Verify space key exists and is accessible
-- Check if pages have content (not just attachments)
-- Verify search query returns results in Confluence UI
-
-**Problem**: "Token limit exceeded"
-- Confluence pages can be very large
-- The adapter automatically chunks content
-- Consider reducing `max_pages` for initial testing
-
-### API Issues
-
-**Problem**: Rate limiting
-- Confluence has API rate limits
-- Consider adding delays for large batch processing
-- Monitor Confluence admin logs
-
-## Best Practices
-
-### 1. **Start Small**
-```python
-# Test with limited pages first
-config = {'max_pages': 5}
-```
-
-### 2. **Use Specific Inputs**
-```python
-# More efficient than space crawling
-{'page_id': '123456'}        # Best
-{'search_query': 'specific'} # Good  
-{'space_key': 'HUGE_SPACE'}  # Potentially slow
-```
-
-### 3. **Monitor Token Usage**
-- Large Confluence spaces can generate many API calls
-- Each page processed uses OpenAI embedding tokens
-- Consider batch processing for cost efficiency
-
-### 4. **Regular Updates**
-```python
-# For keeping content fresh, consider periodic re-ingestion
-# The adapter handles duplicate content by source_id
-```
-
-## Next Steps
-
-1. **Test the connection** with your Confluence instance
-2. **Start with a small space** to verify functionality  
-3. **Scale up gradually** based on your needs
-4. **Monitor performance** and adjust `max_pages` as needed
-5. **Consider automation** for regular content updates
-
-The Confluence adapter is now ready to make your organization's knowledge searchable through the AI assistant! 🚀 
+This Confluence adapter provides a production-ready solution for integrating Confluence knowledge bases into your AI-powered search system, with comprehensive metadata preservation and seamless integration with existing document and code search capabilities. 
