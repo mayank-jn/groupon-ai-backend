@@ -9,10 +9,13 @@ from sources import SourceFactory
 from sources.document_upload import DocumentUploadAdapter
 from sources.confluence import ConfluenceAdapter
 from embeddings.vector_store import VectorStore
-from config import EMBEDDING_MODEL_NAME
+from config import EMBEDDING_MODEL_NAME, COLLECTION_NAME
 from retrieval.openai_assistant import answer as assistant_answer, reset_thread
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 import os
 import openai
+from sources.github.adapter import GitHubSourceAdapter
+from github import Github
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -24,6 +27,7 @@ SOURCE_TYPE_MAPPING = {
     "engineering_docs": ["document_upload"],  # Document uploads
     "confluence_docs": ["confluence"],  # Confluence pages
     "jira_tickets": ["jira"],  # Future JIRA integration
+    "github_live": ["github_live"],  # GitHub Live search (handled separately)
 }
 
 def get_source_types_filter(source: str) -> Optional[List[str]]:
@@ -34,10 +38,24 @@ def get_source_types_filter(source: str) -> Optional[List[str]]:
         return ["confluence"]
     elif source == "jira_tickets":
         return ["jira"]
+    elif source == "github_live":
+        return ["github_live"]  # This will be handled separately in search logic
     elif source == "all":
         return None  # No filtering
     else:
         return None
+
+def _extract_search_terms(query: str) -> str:
+    """Extract key search terms from complex queries for GitHub API search."""
+    # Remove common stop words and extract meaningful terms
+    stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'how', 'what', 'where', 'when', 'why', 'can', 'could', 'should', 'would', 'help', 'me', 'you', 'i', 'we', 'they'}
+    
+    # Split query into words and filter out stop words
+    words = query.lower().split()
+    meaningful_words = [word.strip('.,!?;:()[]{}') for word in words if word.lower() not in stop_words and len(word) > 2]
+    
+    # Join back with spaces, limit to first 5 most meaningful terms
+    return ' '.join(meaningful_words[:5])
 
 # Pydantic models for Confluence source inputs
 class ConfluenceSpaceInput(BaseModel):
@@ -65,7 +83,7 @@ ConfluenceSourceInput = Union[ConfluenceSpaceInput, ConfluencePageInput, Conflue
 # Search request model
 class SearchRequest(BaseModel):
     query: str = Field(..., description="Search query")
-    source: str = Field("all", description="Source to search in: 'all', 'engineering_docs', 'confluence_docs', 'jira_tickets'")
+    source: str = Field("all", description="Source to search in: 'all', 'engineering_docs', 'confluence_docs', 'jira_tickets', 'github_live'")
     
     class Config:
         json_schema_extra = {
@@ -106,6 +124,39 @@ class ConfluenceIngestRequest(BaseModel):
             ]
         }
 
+class GitHubIngestRequest(BaseModel):
+    repo_url: str
+
+def embed_and_upsert_github_chunks(results):
+    from embeddings.vector_store import VectorStore
+    import openai
+    from config import EMBEDDING_MODEL_NAME
+    from datetime import datetime
+
+    chunks = [r.content for r in results]
+    metadatas = []
+    for r in results:
+        m = dict(r.metadata)
+        # Backward compatible fields
+        m["text"] = r.content
+        m["source"] = r.title or r.metadata.get("repo")
+        m["source_type"] = r.source_type
+        m["source_id"] = r.source_id
+        m["title"] = r.title or r.metadata.get("repo")
+        m["embedding_model"] = EMBEDDING_MODEL_NAME
+        m["ingested_at"] = datetime.utcnow().isoformat()
+        metadatas.append(m)
+
+    response = openai.embeddings.create(
+        model=EMBEDDING_MODEL_NAME,
+        input=chunks
+    )
+    embeddings = [d.embedding for d in response.data]
+    vector_store = VectorStore()
+    vector_store.create_collection_if_not_exists(vector_size=len(embeddings[0]))
+    vector_store.upsert_embeddings(embeddings, metadatas)
+    print(f"Upserted {len(embeddings)} GitHub code/document chunks to Qdrant.")
+
 app = FastAPI(
     title="Groupon AI Knowledge Assistant Backend", 
     description="AI-powered knowledge assistant using OpenAI Assistant APIs with Qdrant vector search and extensible source adapters", 
@@ -143,11 +194,22 @@ async def upload_doc(file: UploadFile = File(...)):
             'upload_dir': 'sample_docs'
         })
         
-        # Validate input
-        if not adapter.validate_input(file):
-            return {"status": "error", "message": f"Unsupported file type: {file.filename}"}
+        # Enhanced validation with better error handling
+        if not file.filename:
+            return {"status": "error", "message": "No filename provided"}
         
-        # Process the document
+        # Check file extension directly
+        import os
+        file_extension = os.path.splitext(file.filename)[1].lower()
+        supported_formats = ['.pdf', '.docx', '.txt', '.md']
+        
+        if file_extension not in supported_formats:
+            return {"status": "error", "message": f"Unsupported file type: {file.filename}. Supported formats: {', '.join(supported_formats)}"}
+        
+        # Skip adapter validation since we've already validated the file type
+        # The adapter validation has issues with UploadFile objects, but the processing works fine
+        
+        # Process the document directly
         source_results = adapter.process_source(file)
         
         # Prepare data for embedding
@@ -377,13 +439,210 @@ async def ingest_confluence(request: ConfluenceIngestRequest):
 
 @app.post("/search")
 async def search_query(request: SearchRequest):
-    """Search endpoint using OpenAI's Assistants API with source filtering."""
+    """Search endpoint using OpenAI's Assistants API with source filtering and GitHub Live search."""
     # Validate source parameter
     if request.source not in SOURCE_TYPE_MAPPING:
         return {
             "error": f"Invalid source '{request.source}'. Valid options: {list(SOURCE_TYPE_MAPPING.keys())}"
         }
     
+    # Handle GitHub Live search
+    if request.source == 'github_live':
+        try:
+            # Get list of ingested repositories to ensure we only search within them
+            ingested_repos = vector_store.get_ingested_github_repositories()
+            if not ingested_repos:
+                return {
+                    "error": "No GitHub repositories have been ingested yet. Please ingest repositories first using /ingest/github endpoint.",
+                    "answer": "No GitHub repositories have been ingested yet. Please ingest repositories first.",
+                    "search_source": "github_live",
+                    "github_live_results": [],
+                    "total_results": 0,
+                    "code_results": 0,
+                    "issues_results": 0
+                }
+            
+            # WORLD-CLASS SEMANTIC SEARCH: Use enhanced vector database search
+            # 1. Generate query embedding for semantic search
+            response = openai.embeddings.create(
+                model=EMBEDDING_MODEL_NAME,
+                input=[request.query]
+            )
+            query_embedding = response.data[0].embedding
+            
+            # 2. Use enhanced semantic search with intelligent filtering
+            semantic_hits = vector_store.search_github_semantic(
+                query_vector=query_embedding,
+                top_k=15,
+                repositories=ingested_repos,  # Only search within ingested repos
+                score_threshold=0.25  # Lower threshold for more results
+            )
+            
+            # 3. Advanced result processing with enhanced metadata
+            processed_results = []
+            github_token = os.getenv("GITHUB_TOKEN")
+            gh = Github(github_token) if github_token else None
+            
+            for hit in semantic_hits:
+                payload = hit.payload
+                repo_name = payload.get("repo", "")
+                file_path = payload.get("path", "")
+                language = payload.get("language", "")
+                file_name = payload.get("name", "")
+                chunk_type = payload.get("chunk_type", "unknown")
+                function_name = payload.get("function_name")
+                section_title = payload.get("section_title")
+                semantic_tags = payload.get("semantic_tags", [])
+                tech_stack = payload.get("tech_stack", [])
+                
+                # Create intelligent snippet based on chunk type
+                content = payload.get("text", "")
+                if chunk_type == "function" and function_name:
+                    snippet = f"Function: {function_name}\n{content[:400]}..."
+                elif chunk_type == "documentation_section" and section_title:
+                    snippet = f"Section: {section_title}\n{content[:400]}..."
+                elif chunk_type == "configuration":
+                    snippet = f"Config: {file_name}\n{content[:300]}..."
+                else:
+                    snippet = content[:500]
+                
+                # Calculate enhanced relevance score
+                relevance_score = min(100, int(hit.score * 100))
+                
+                # Boost score based on semantic relevance
+                if any(tag in request.query.lower() for tag in semantic_tags):
+                    relevance_score = min(100, relevance_score + 10)
+                
+                # Enhanced metadata for better user experience
+                result = {
+                    "type": "code",
+                    "name": file_name,
+                    "path": file_path,
+                    "repository": repo_name,
+                    "language": language,
+                    "chunk_type": chunk_type,
+                    "function_name": function_name,
+                    "section_title": section_title,
+                    "semantic_tags": semantic_tags,
+                    "tech_stack": tech_stack,
+                    "relevance_score": relevance_score,
+                    "snippet": snippet,
+                    "semantic_score": hit.score,
+                    "ingested": True,
+                    "search_type": "semantic_vector_enhanced"
+                }
+                
+                # Generate GitHub URL
+                if repo_name:
+                    if gh:
+                        try:
+                            repo = gh.get_repo(repo_name)
+                            default_branch = repo.default_branch
+                        except:
+                            default_branch = "main"
+                    else:
+                        default_branch = "main"
+                    result["html_url"] = f"https://github.com/{repo_name}/blob/{default_branch}/{file_path}"
+                
+                processed_results.append(result)
+            
+            # 4. Enhanced GitHub Issues/PRs search (if GitHub token available)
+            github_issues = []
+            if gh and len(processed_results) < 8:  # Only search issues if we have few code results
+                try:
+                    search_terms = _extract_search_terms(request.query)
+                    
+                    for repo_name in ingested_repos[:2]:  # Limit to first 2 repos for performance
+                        try:
+                            if '/' in repo_name:
+                                q = f"{search_terms} repo:{repo_name}"
+                                issues_search_results = gh.search_issues(q)[:3]
+                                
+                                for item in issues_search_results:
+                                    github_issues.append({
+                                        "type": "issue",
+                                        "title": item.title,
+                                        "number": item.number,
+                                        "state": item.state,
+                                        "repository": repo_name,
+                                        "html_url": item.html_url,
+                                        "is_pull_request": item.pull_request is not None,
+                                        "body": item.body[:300] if item.body else None,
+                                        "ingested": True,
+                                        "search_type": "github_api_enhanced"
+                                    })
+                        except Exception as e:
+                            print(f"Error searching issues in {repo_name}: {e}")
+                            continue
+                except Exception as e:
+                    print(f"Error in GitHub issues search: {e}")
+            
+            # 5. Intelligent ranking and result combination
+            all_results = processed_results + github_issues
+            
+            # Advanced sorting: semantic score for code, then by relevance
+            all_results.sort(key=lambda x: (
+                -x.get("semantic_score", 0) if x["type"] == "code" else -0.4,
+                -x.get("relevance_score", 0),
+                x["type"] == "code"  # Code results first
+            ))
+            
+            # Limit final results
+            all_results = all_results[:10]
+            
+            total_results = len(all_results)
+            code_results = len([r for r in all_results if r["type"] == "code"])
+            issues_results = len([r for r in all_results if r["type"] == "issue"])
+            
+            # 6. Generate intelligent answer with context
+            if total_results > 0:
+                answer = f"Found {total_results} semantically relevant results"
+                if code_results > 0 and issues_results > 0:
+                    answer += f" ({code_results} code files, {issues_results} issues/PRs)"
+                elif code_results > 0:
+                    answer += f" ({code_results} code files)"
+                elif issues_results > 0:
+                    answer += f" ({issues_results} issues/PRs)"
+                
+                # Add intelligent context about search quality
+                if semantic_hits and semantic_hits[0].score > 0.8:
+                    answer += " with high semantic relevance"
+                elif semantic_hits and semantic_hits[0].score > 0.6:
+                    answer += " with good semantic relevance"
+                else:
+                    answer += " - consider refining your query for better results"
+                
+                # Add technology context if available
+                languages_found = set(r.get("language") for r in processed_results if r.get("language"))
+                if languages_found:
+                    answer += f". Languages: {', '.join(sorted(languages_found))}"
+            else:
+                answer = f"No semantically relevant results found for '{request.query}' in your ingested GitHub repositories. Try using different keywords or broader terms."
+            
+            return {
+                "answer": answer,
+                "search_source": "github_live",
+                "github_live_results": all_results,
+                "total_results": total_results,
+                "code_results": code_results,
+                "issues_results": issues_results,
+                "search_method": "semantic_vector_enhanced",
+                "ingested_repositories": len(ingested_repos),
+                "search_quality": "high" if semantic_hits and semantic_hits[0].score > 0.7 else "medium" if semantic_hits and semantic_hits[0].score > 0.5 else "low"
+            }
+            
+        except Exception as e:
+            return {
+                "error": str(e),
+                "answer": f"Error performing GitHub Live search: {str(e)}",
+                "search_source": "github_live",
+                "github_live_results": [],
+                "total_results": 0,
+                "code_results": 0,
+                "issues_results": 0
+            }
+    
+    # Handle regular search (existing logic)
     source_types = get_source_types_filter(request.source)
     result = assistant_answer(request.query, source_types=source_types)
     result["search_source"] = request.source
@@ -405,7 +664,8 @@ async def get_search_sources():
             "all": "Search across all content types",
             "engineering_docs": "Search only uploaded documents (PDFs, TXT, MD, DOCX, etc.)",
             "confluence_docs": "Search only Confluence pages", 
-            "jira_tickets": "Search only JIRA tickets (future feature)"
+            "jira_tickets": "Search only JIRA tickets (future feature)",
+            "github_live": "Live search code & issues in ingested GitHub repositories"
         },
         "source_mapping": {
             source: types for source, types in SOURCE_TYPE_MAPPING.items() if types is not None
@@ -524,5 +784,94 @@ async def migrate_documents():
             "note": "Documents with null source_type have been updated to 'document_upload' with enhanced metadata"
         }
         
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post("/ingest/github")
+async def ingest_github_repo(request: GitHubIngestRequest):
+    """
+    Ingest a GitHub repository into the vector database.
+    
+    This endpoint clones the given GitHub repository, scans and chunks all relevant code and markdown files, generates embeddings, and upserts them to Qdrant with rich metadata.
+    
+    Request body:
+    {
+        "repo_url": "https://github.com/owner/repo.git"
+    }
+    
+    Returns:
+    - status: "success" or "error"
+    - chunks_ingested: number of chunks ingested (if success)
+    - message: error message (if error)
+    """
+    adapter = GitHubSourceAdapter()
+    try:
+        results = adapter.process_source(request.repo_url)
+        embed_and_upsert_github_chunks(results)
+        return {"status": "success", "chunks_ingested": len(results)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/github/repositories")
+async def list_ingested_repositories():
+    """
+    Get a list of all GitHub repositories that have been ingested into the database.
+    This shows which repositories are available for GitHub live search.
+    """
+    try:
+        ingested_repos = vector_store.get_ingested_github_repositories()
+        
+        # Get additional metadata for each repository
+        repo_details = []
+        for repo_name in ingested_repos:
+            # Count how many documents/chunks are from this repo
+            try:
+                points, _ = vector_store.client.scroll(
+                    collection_name=COLLECTION_NAME,
+                    limit=1000,  # Should be enough for most repos
+                    with_payload=True,
+                    with_vectors=False,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(key="source_type", match=MatchValue(value="github")),
+                            FieldCondition(key="repo", match=MatchValue(value=repo_name))
+                        ]
+                    )
+                )
+                
+                # Extract file types and languages
+                file_types = set()
+                languages = set()
+                for point in points:
+                    if point.payload.get("language"):
+                        languages.add(point.payload["language"])
+                    if point.payload.get("name"):
+                        ext = point.payload["name"].split(".")[-1] if "." in point.payload["name"] else "unknown"
+                        file_types.add(ext)
+                
+                repo_details.append({
+                    "repository": repo_name,
+                    "chunks_count": len(points),
+                    "languages": list(languages),
+                    "file_types": list(file_types),
+                    "github_url": f"https://github.com/{repo_name}"
+                })
+            except Exception as e:
+                print(f"Error getting details for repo {repo_name}: {e}")
+                repo_details.append({
+                    "repository": repo_name,
+                    "chunks_count": 0,
+                    "languages": [],
+                    "file_types": [],
+                    "github_url": f"https://github.com/{repo_name}",
+                    "error": str(e)
+                })
+        
+        return {
+            "status": "success",
+            "total_repositories": len(ingested_repos),
+            "repositories": repo_details,
+            "message": "These repositories are available for GitHub live search"
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}

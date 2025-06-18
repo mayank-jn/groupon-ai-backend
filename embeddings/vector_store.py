@@ -49,13 +49,24 @@ class VectorStore:
             print("✅ Created index for source_type field")
         except Exception as e:
             print(f"⚠️  Could not create source_type index: {e}")
+        
+        try:
+            # Create index for repo field (needed for GitHub repository filtering)
+            self.client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name="repo",
+                field_schema=PayloadSchemaType.KEYWORD
+            )
+            print("✅ Created index for repo field")
+        except Exception as e:
+            print(f"⚠️  Could not create repo index: {e}")
             
     def _ensure_indexes(self):
         """Ensure required indexes exist."""
         try:
-            # Check if source_type index exists, create if not
+            # Check if indexes exist, create if not
             collection_info = self.client.get_collection(COLLECTION_NAME)
-            # If we can get collection info, try to create index (it will be ignored if exists)
+            # If we can get collection info, try to create indexes (they will be ignored if they exist)
             self._create_indexes()
         except Exception as e:
             print(f"⚠️  Could not ensure indexes: {e}")
@@ -137,3 +148,264 @@ class VectorStore:
         except Exception as e:
             print(f"Error updating point {point_id}: {e}")
             return False
+    
+    def get_ingested_github_repositories(self):
+        """Get all unique GitHub repositories that have been ingested."""
+        try:
+            # Use scroll to get all GitHub points
+            all_repos = set()
+            next_page_offset = None
+            
+            while True:
+                points, next_page_offset = self.client.scroll(
+                    collection_name=COLLECTION_NAME,
+                    limit=100,
+                    with_payload=True,
+                    with_vectors=False,
+                    offset=next_page_offset,
+                    scroll_filter=Filter(
+                        must=[FieldCondition(key="source_type", match=MatchValue(value="github"))]
+                    )
+                )
+                
+                # Extract repository names from metadata
+                for point in points:
+                    repo_name = point.payload.get("repo")
+                    if repo_name:
+                        all_repos.add(repo_name)
+                
+                if next_page_offset is None:
+                    break
+            
+            return list(all_repos)
+        except Exception as e:
+            print(f"Error getting ingested GitHub repositories: {e}")
+            return []
+
+    def search_github_semantic(self, query_vector, top_k=10, repositories=None, languages=None, semantic_tags=None, score_threshold=0.3):
+        """
+        Advanced semantic search specifically for GitHub content with enhanced filtering.
+        
+        Args:
+            query_vector: The embedding vector for the search query
+            top_k: Number of results to return
+            repositories: List of repository names to search within
+            languages: List of programming languages to filter by
+            semantic_tags: List of semantic tags to filter by
+            score_threshold: Minimum similarity score threshold
+        """
+        try:
+            # Build complex filter conditions
+            filter_conditions = [
+                FieldCondition(key="source_type", match=MatchValue(value="github"))
+            ]
+            
+            # Repository filtering
+            if repositories:
+                if len(repositories) == 1:
+                    filter_conditions.append(
+                        FieldCondition(key="repo", match=MatchValue(value=repositories[0]))
+                    )
+                else:
+                    repo_conditions = [
+                        FieldCondition(key="repo", match=MatchValue(value=repo))
+                        for repo in repositories
+                    ]
+                    # Use should condition for OR logic between repositories
+                    filter_conditions.append(Filter(should=repo_conditions))
+            
+            # Language filtering
+            if languages:
+                if len(languages) == 1:
+                    filter_conditions.append(
+                        FieldCondition(key="language", match=MatchValue(value=languages[0]))
+                    )
+                else:
+                    lang_conditions = [
+                        FieldCondition(key="language", match=MatchValue(value=lang))
+                        for lang in languages
+                    ]
+                    filter_conditions.append(Filter(should=lang_conditions))
+            
+            # Semantic tags filtering
+            if semantic_tags:
+                # This requires the semantic_tags to be stored as an array in the payload
+                for tag in semantic_tags:
+                    filter_conditions.append(
+                        FieldCondition(key="semantic_tags", match=MatchValue(value=tag))
+                    )
+            
+            # Combine all conditions with AND logic
+            query_filter = Filter(must=filter_conditions) if filter_conditions else None
+            
+            # Perform the search
+            hits = self.client.search(
+                collection_name=COLLECTION_NAME,
+                query_vector=query_vector,
+                limit=top_k,
+                query_filter=query_filter,
+                with_payload=True,
+                score_threshold=score_threshold
+            )
+            
+            return hits
+            
+        except Exception as e:
+            print(f"Error in GitHub semantic search: {e}")
+            return []
+
+    def get_github_repository_stats(self, repo_name):
+        """Get detailed statistics for a specific GitHub repository."""
+        try:
+            points, _ = self.client.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=1000,
+                with_payload=True,
+                with_vectors=False,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(key="source_type", match=MatchValue(value="github")),
+                        FieldCondition(key="repo", match=MatchValue(value=repo_name))
+                    ]
+                )
+            )
+            
+            if not points:
+                return None
+            
+            # Analyze the repository
+            stats = {
+                "repo_name": repo_name,
+                "total_chunks": len(points),
+                "languages": {},
+                "chunk_types": {},
+                "semantic_tags": {},
+                "file_extensions": {},
+                "functions": [],
+                "documentation_sections": []
+            }
+            
+            for point in points:
+                payload = point.payload
+                
+                # Language distribution
+                lang = payload.get("language", "unknown")
+                stats["languages"][lang] = stats["languages"].get(lang, 0) + 1
+                
+                # Chunk type distribution
+                chunk_type = payload.get("chunk_type", "unknown")
+                stats["chunk_types"][chunk_type] = stats["chunk_types"].get(chunk_type, 0) + 1
+                
+                # Semantic tags
+                tags = payload.get("semantic_tags", [])
+                for tag in tags:
+                    stats["semantic_tags"][tag] = stats["semantic_tags"].get(tag, 0) + 1
+                
+                # File extensions
+                ext = payload.get("file_extension", "unknown")
+                stats["file_extensions"][ext] = stats["file_extensions"].get(ext, 0) + 1
+                
+                # Function names
+                if payload.get("function_name"):
+                    stats["functions"].append({
+                        "name": payload["function_name"],
+                        "file": payload.get("name", "unknown"),
+                        "path": payload.get("path", "unknown")
+                    })
+                
+                # Documentation sections
+                if payload.get("section_title"):
+                    stats["documentation_sections"].append({
+                        "title": payload["section_title"],
+                        "file": payload.get("name", "unknown"),
+                        "path": payload.get("path", "unknown")
+                    })
+            
+            return stats
+            
+        except Exception as e:
+            print(f"Error getting repository stats for {repo_name}: {e}")
+            return None
+
+    def search_github_by_function(self, function_name, repositories=None):
+        """Search for specific functions across GitHub repositories."""
+        try:
+            filter_conditions = [
+                FieldCondition(key="source_type", match=MatchValue(value="github")),
+                FieldCondition(key="function_name", match=MatchValue(value=function_name))
+            ]
+            
+            if repositories:
+                if len(repositories) == 1:
+                    filter_conditions.append(
+                        FieldCondition(key="repo", match=MatchValue(value=repositories[0]))
+                    )
+                else:
+                    repo_conditions = [
+                        FieldCondition(key="repo", match=MatchValue(value=repo))
+                        for repo in repositories
+                    ]
+                    filter_conditions.append(Filter(should=repo_conditions))
+            
+            points, _ = self.client.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=50,
+                with_payload=True,
+                with_vectors=False,
+                scroll_filter=Filter(must=filter_conditions)
+            )
+            
+            return points
+            
+        except Exception as e:
+            print(f"Error searching for function {function_name}: {e}")
+            return []
+
+    def get_github_tech_stack_analysis(self):
+        """Analyze technology stack across all ingested GitHub repositories."""
+        try:
+            points, _ = self.client.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=1000,
+                with_payload=True,
+                with_vectors=False,
+                scroll_filter=Filter(
+                    must=[FieldCondition(key="source_type", match=MatchValue(value="github"))]
+                )
+            )
+            
+            analysis = {
+                "total_repositories": len(self.get_ingested_github_repositories()),
+                "total_chunks": len(points),
+                "languages": {},
+                "tech_stacks": {},
+                "semantic_concepts": {},
+                "file_types": {}
+            }
+            
+            for point in points:
+                payload = point.payload
+                
+                # Language analysis
+                lang = payload.get("language", "unknown")
+                analysis["languages"][lang] = analysis["languages"].get(lang, 0) + 1
+                
+                # Tech stack analysis
+                tech_stack = payload.get("tech_stack", [])
+                for tech in tech_stack:
+                    analysis["tech_stacks"][tech] = analysis["tech_stacks"].get(tech, 0) + 1
+                
+                # Semantic concepts
+                tags = payload.get("semantic_tags", [])
+                for tag in tags:
+                    analysis["semantic_concepts"][tag] = analysis["semantic_concepts"].get(tag, 0) + 1
+                
+                # File types
+                ext = payload.get("file_extension", "unknown")
+                analysis["file_types"][ext] = analysis["file_types"].get(ext, 0) + 1
+            
+            return analysis
+            
+        except Exception as e:
+            print(f"Error in tech stack analysis: {e}")
+            return None
